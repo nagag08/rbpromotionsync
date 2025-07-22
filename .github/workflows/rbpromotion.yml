@@ -5,8 +5,6 @@ on:
   # workflow_dispatch is mandatory, so that Artifactory can trigger
   # the workflow through GitHub REST API.
   workflow_dispatch: 
-    # inputs are optional, they may be used to convey contextual data
-    # from the JFrog event to the workflow.
     inputs:
       name: 
         required: true 
@@ -53,7 +51,7 @@ jobs:
             echo "ID_TOKEN=${ID_TOKEN}" >> $GITHUB_ENV
             echo "ID_TOKEN: $ID_TOKEN"
             
-      - name: Exchange token with access
+      - name: Exchange token with access in source jpd
         env:
             ID_TOKEN: ${{env.ID_TOKEN}}
             JFROG_PLATFORM_URL: https://${{ inputs.sourceurl }}
@@ -61,7 +59,7 @@ jobs:
             SOURCE_ACCESS_TOKEN=$(curl -v -XPOST -H "Content-Type: application/json" "${{ env.JFROG_PLATFORM_URL }}/access/api/v1/oidc/token" -d "{\"grant_type\": \"urn:ietf:params:oauth:grant-type:token-exchange\", \"subject_token_type\":\"urn:ietf:params:oauth:token-type:id_token\", \"subject_token\": \"${ID_TOKEN}\", \"provider_name\": \"nareshgithub\"}" | jq .access_token | tr -d '"')
             echo "SOURCE_ACCESS_TOKEN=${SOURCE_ACCESS_TOKEN}" >> $GITHUB_ENV
 
-      - name: Exchange token with access
+      - name: Exchange token with access in target jpd
         env:
             ID_TOKEN: ${{env.ID_TOKEN}}
             JFROG_PLATFORM_URL: https://${{ inputs.targeturl }}
@@ -69,7 +67,7 @@ jobs:
             TARGET_ACCESS_TOKEN=$(curl -v -XPOST -H "Content-Type: application/json" "${{ env.JFROG_PLATFORM_URL }}/access/api/v1/oidc/token" -d "{\"grant_type\": \"urn:ietf:params:oauth:grant-type:token-exchange\", \"subject_token_type\":\"urn:ietf:params:oauth:token-type:id_token\", \"subject_token\": \"${ID_TOKEN}\", \"provider_name\": \"nareshgithub\"}" | jq .access_token | tr -d '"')
             echo "TARGET_ACCESS_TOKEN=${TARGET_ACCESS_TOKEN}" >> $GITHUB_ENV
 
-      # Use the specific setup-cli branch
+      # Configure jf cli for target server
       - name: Setup JFrog CLI
         uses: jfrog/setup-jfrog-cli@v4
         id: setup-cli-source
