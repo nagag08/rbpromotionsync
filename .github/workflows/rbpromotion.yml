@@ -1,5 +1,5 @@
 
-name: release_bundle_source
+name: release_bundle_promotionsync
 
 on:
   # workflow_dispatch is mandatory, so that Artifactory can trigger
