@@ -1,4 +1,3 @@
-````markdown
 # JFrog Release Bundle Promotion History Sync
 
 This repository contains a Python script designed to perform a bulk synchronization of existing JFrog Artifactory Release Bundle promotion histories from a source JFrog Platform Deployment (JPD) to a target JPD.
@@ -48,7 +47,6 @@ The script is run from the command line with five arguments.
 
 ```bash
 python3 sync_rb_promotions.py <SOURCE_TOKEN> <TARGET_TOKEN> <SOURCE_URL> <TARGET_URL> <ENVIRONMENT_FILTER>
-````
 
 #### **Arguments**
 
