@@ -44,9 +44,11 @@ jobs:
       - name: Print origin
         run: echo ${{ inputs.name }}
 
-      - name: Print URL
-        run: echo  The source url is ${{ inputs.sourceurl }}  and target url is ${{ inputs.targeturl }} and  env is ${{ inputs.environment }} and repository key is ${{ inputs.repository_key }} 
-
+      - name: Print parameters
+        run: |
+            echo  The source url is ${{ inputs.sourceurl }}  and target url is ${{ inputs.targeturl }} and  env is ${{ inputs.environment }} and repository key is ${{ inputs.repository_key }} 
+            echo  Release bundle name ${{ inputs.release_bundle }} Release bundle version ${{ inputs.bundle_version }}
+            
       - name: Get id token
         run: |
             ID_TOKEN=$(curl -sLS -H "User-Agent: actions/oidc-client" -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
