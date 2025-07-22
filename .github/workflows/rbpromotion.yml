@@ -42,10 +42,10 @@ jobs:
         uses: actions/checkout@v3
         
       - name: Print origin
-        run: echo The event origin is ${{ inputs.name }}
+        run: echo ${{ inputs.name }}
 
       - name: Print URL
-        run: echo  The path is ${{ inputs.sourceurl }}  and target url is ${{ inputs.targeturl }} and  env is ${{ inputs.environment }} and repository key is ${{ inputs.repository_key }} 
+        run: echo  The source url is ${{ inputs.sourceurl }}  and target url is ${{ inputs.targeturl }} and  env is ${{ inputs.environment }} and repository key is ${{ inputs.repository_key }} 
 
       - name: Get id token
         run: |
