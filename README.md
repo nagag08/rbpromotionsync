@@ -47,7 +47,7 @@ You need to configure a webhook on your **source** Artifactory instance.
 * **Event Type**: Select `Release Bundle Promotion Completed`.
 * **URL**: Provide the GitHub Actions `workflow_dispatch` URL:
     ```
-    [https://api.github.com/repos/YOUR_ORG/YOUR_REPO/actions/workflows/release_bundle_source.yml/dispatches](https://api.github.com/repos/YOUR_ORG/YOUR_REPO/actions/workflows/release_bundle_source.yml/dispatches)
+    [https://api.github.com/repos/nareshp1234/rbpromotionsync/actions/workflows/rbpromotion.yml/dispatches](https://api.github.com/repos/nareshp1234/rbpromotionsync/actions/workflows/rbpromotion.yml/dispatches)
     ```
 * **Payload**: Use the following JSON payload to send the required data to the workflow. This maps the event data to the `inputs` defined in your `.yml` file.
     ```json
