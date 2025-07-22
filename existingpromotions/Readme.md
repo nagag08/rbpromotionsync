@@ -1,5 +1,3 @@
-Of course. Here is the complete and entire `Readme.md` content in a single block. You can copy everything inside the box below, and it will include all sections like the arguments, examples, and license.
-
 ````markdown
 # JFrog Release Bundle Promotion History Sync
 
