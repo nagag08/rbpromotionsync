@@ -53,8 +53,8 @@ python3 sync_rb_promotions.py <SOURCE_TOKEN> <TARGET_TOKEN> <SOURCE_URL> <TARGET
 
 | Argument           | Description                                                                                          | Required | Example                    |
 | :----------------- | :--------------------------------------------------------------------------------------------------- | :------- | :------------------------- |
-| `SOURCE_TOKEN`     | An access token for the source JPD.                                                                  | Yes      | `eyJ...`                   |
-| `TARGET_TOKEN`     | An access token for the target JPD.                                                                  | Yes      | `eyJ...`                   |
+| `SOURCE_TOKEN`     | An access token for the source JPD.                                                                  | Yes      | `****`                   |
+| `TARGET_TOKEN`     | An access token for the target JPD.                                                                  | Yes      | `****`                   |
 | `SOURCE_URL`       | The full base URL of the source JPD.                                                                 | Yes      | `https://my-source.jfrog.io` |
 | `TARGET_URL`       | The full base URL of the target JPD.                                                                 | Yes      | `https://my-target.jfrog.io` |
 | `ENVIRONMENT_FILTER` | The specific environment to sync (e.g., "PROD"). To sync all environments, provide empty quotes `""`. | Yes      | `"PROD"` or `""`             |
