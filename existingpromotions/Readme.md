@@ -47,6 +47,7 @@ The script is run from the command line with five arguments.
 
 ```bash
 python3 sync_rb_promotions.py <SOURCE_TOKEN> <TARGET_TOKEN> <SOURCE_URL> <TARGET_URL> <ENVIRONMENT_FILTER>
+```
 
 #### **Arguments**
 
