@@ -27,6 +27,9 @@ on:
       repository_key: 
         required: true 
         type: string
+      jpd_origin:
+        required: true
+        type: string
 
 permissions:
   actions: read # for detecting the Github Actions environment.
@@ -97,3 +100,5 @@ jobs:
           BUNDLE_VERSION: ${{ inputs.bundle_version }}
           ENVIRONMENT: ${{ inputs.environment }}
           REPOSITORY_KEY: ${{ inputs.repository_key }}
+          JPD_ORIGIN: ${{ inputs.jpd_origin }}
+          PRIMARY_SOURCE_URL: https://${{ inputs.sourceurl }}
