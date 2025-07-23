@@ -96,7 +96,6 @@ def main():
     environment = os.getenv("ENVIRONMENT")
     input_repository_key = os.getenv("REPOSITORY_KEY")
     jpd_origin = os.getenv("JPD_ORIGIN")
-    # NEW: Get the fixed primary source URL
     primary_source_url = os.getenv("PRIMARY_SOURCE_URL")
 
     if not all([source_access_token, target_access_token, source_url, target_url, release_bundle_name, bundle_version, environment, input_repository_key, jpd_origin, primary_source_url]):
