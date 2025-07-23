@@ -102,7 +102,6 @@ def main():
     print(f"Processing bundle: {release_bundle_name}/{bundle_version}")
     print(f"Triggering and Target Environment: '{environment}'")
 
-    # --- Find the correct Project Key ---
     print("\n--- Determining Project Key ---")
     project_key = "default" 
     names_response = get_release_bundle_names_with_project_keys(source_url, source_access_token)
@@ -115,7 +114,6 @@ def main():
     else:
         print("::warning::Could not fetch release bundle names. Falling back to project_key 'default'.")
     
-    # --- 1. Find the specific SOURCE promotion event using the ENVIRONMENT from the trigger ---
     print("\n--- Finding the exact triggering promotion event on the source server ---")
     source_audit_data = get_release_bundle_details(source_url, source_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
     
@@ -135,39 +133,40 @@ def main():
         print(f"::error::Could not find a promotion event for '{environment}' in the source audit trail.")
         sys.exit(1)
 
-    # --- 2. Extract Details ---
     source_context = source_promotion_event.get("context", {})
     source_timestamp = source_context.get("promotion_created_millis")
     source_included_repos_set = parse_repos_to_set(source_context.get("included_repository_keys"))
     source_excluded_repos_set = parse_repos_to_set(source_context.get("excluded_repository_keys"))
     
-    # --- 3. PRE-FLIGHT CHECK on TARGET ---
-    print("\n--- Checking latest promotion on target for an identical match ---")
+    # --- 3. PRE-FLIGHT CHECK on TARGET  ---
+    print("\n--- Checking target's full history for an identical promotion ---")
     target_audit_data = get_release_bundle_details(target_url, target_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
     
-    latest_target_promotion_event = None
     if target_audit_data and "audits" in target_audit_data:
+        # Loop through the entire history on the target
         for audit_event in target_audit_data.get("audits", []):
             if (audit_event.get("subject_type") == "PROMOTION" and
                 not audit_event.get("subject_reference", "").startswith("FED-")):
-                latest_target_promotion_event = audit_event
-                break
-
-    if latest_target_promotion_event:
-        target_context = latest_target_promotion_event.get("context", {})
-        latest_target_environment = target_context.get("environment")
-        
-        if str(latest_target_environment) == str(environment):
-            target_included_repos_set = parse_repos_to_set(target_context.get("included_repository_keys"))
-            target_excluded_repos_set = parse_repos_to_set(target_context.get("excluded_repository_keys"))
-
-            if (source_included_repos_set == target_included_repos_set and
-                source_excluded_repos_set == target_excluded_repos_set):
                 
-                print("\n✅ Latest promotion on target is identical. Skipping.")
-                sys.exit(0)
+                target_context = audit_event.get("context", {})
+                target_environment = target_context.get("environment")
                 
-    print("::notice::Latest promotion on target is different or non-existent. Proceeding.")
+                # Check if this historical promotion's environment matches
+                if str(target_environment) == str(environment):
+                    print(f"::debug::Found a previous promotion to '{target_environment}'. Checking repositories...")
+                    
+                    target_included_repos_set = parse_repos_to_set(target_context.get("included_repository_keys"))
+                    target_excluded_repos_set = parse_repos_to_set(target_context.get("excluded_repository_keys"))
+
+                    # If repositories also match, it's identical. Skip.
+                    if (source_included_repos_set == target_included_repos_set and
+                        source_excluded_repos_set == target_excluded_repos_set):
+                        
+                        print("\n✅ Found an identical promotion in the target's history.")
+                        print("Skipping to prevent duplicate action. Exiting successfully.")
+                        sys.exit(0)
+                        
+    print(f"::notice::No identical promotion to '{environment}' found in target's history. Proceeding.")
 
     # --- 4. PROCEED WITH PROMOTION ---
     included_repository_keys = source_context.get("included_repository_keys", [])
