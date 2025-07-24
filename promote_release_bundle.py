@@ -48,6 +48,21 @@ def get_promotion_history(url, access_token, repository_key, release_bundle, bun
         print(f"::error::Failed to get promotion history from {url}: {e}")
         return None
 
+def parse_repos_to_set(repo_list):
+    """
+    Converts a list of repositories into a frozenset for order-independent 
+    and format-independent comparison. Handles comma-separated strings.
+    """
+    if not repo_list:
+        return frozenset()
+    
+    parsed_set = set()
+    for item in repo_list:
+        # Split items that might be comma-separated, e.g., "repo-a,repo-b"
+        parsed_set.update(repo.strip() for repo in item.split(','))
+    return frozenset(parsed_set)
+
+
 def main():
     source_access_token = os.getenv("SOURCE_ACCESS_TOKEN")
     target_access_token = os.getenv("TARGET_ACCESS_TOKEN")
@@ -63,7 +78,6 @@ def main():
 
     print(f"--- Starting State Sync for {release_bundle_name}/{bundle_version} ---")
 
-    # --- Find the correct Project Key ---
     print("\n--- Determining Project Key ---")
     project_key = "default"
     names_response = get_release_bundle_names_with_project_keys(source_url, source_access_token)
@@ -73,10 +87,7 @@ def main():
                 project_key = rb_info.get("project_key", "default")
                 print(f"::notice::Matched repository_key '{input_repository_key}' to project_key '{project_key}'.")
                 break
-    else:
-        print("::warning::Could not fetch release bundle names. Falling back to project_key 'default'.")
-
-    # 1. Get full promotion history from both servers
+    
     print("\n--- Fetching Promotion Histories ---")
     source_promotions = get_promotion_history(source_url, source_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
     target_promotions = get_promotion_history(target_url, target_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
@@ -85,29 +96,29 @@ def main():
         print("::error::Could not fetch promotion histories from source or target. Aborting.")
         sys.exit(1)
         
+    # build the set of target promotions
     target_promotions_set = set()
     for promo in target_promotions:
         ctx = promo.get("context", {})
         promo_tuple = (
             ctx.get("environment"),
-            frozenset(ctx.get("included_repository_keys", [])),
-            frozenset(ctx.get("excluded_repository_keys", []))
+            parse_repos_to_set(ctx.get("included_repository_keys", [])),
+            parse_repos_to_set(ctx.get("excluded_repository_keys", []))
         )
         target_promotions_set.add(promo_tuple)
 
-    # 2. Compare histories to find what's missing on the target
+    # CORRECTED: Use the new parsing function to compare source promotions
     promotions_to_sync = []
     for promo in source_promotions:
         ctx = promo.get("context", {})
         promo_tuple = (
             ctx.get("environment"),
-            frozenset(ctx.get("included_repository_keys", [])),
-            frozenset(ctx.get("excluded_repository_keys", []))
+            parse_repos_to_set(ctx.get("included_repository_keys", [])),
+            parse_repos_to_set(ctx.get("excluded_repository_keys", []))
         )
         if promo_tuple not in target_promotions_set:
             promotions_to_sync.append(promo)
 
-    # 3. Apply missing promotions to the target in order
     if not promotions_to_sync:
         print("\n✅ Target is already in sync. No action needed.")
         sys.exit(0)
