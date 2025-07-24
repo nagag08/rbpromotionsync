@@ -1,0 +1,77 @@
+name: Release Bundle Promotion Sync
+
+on:
+  # This allows the workflow to be triggered by the Artifactory webhook
+  workflow_dispatch:
+    inputs:
+      name:
+        required: true
+        type: string
+      release_bundle:
+        required: true
+        type: string
+      bundle_version:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      sourceurl:
+        required: true
+        type: string
+      targeturl:
+        required: true
+        type: string
+      repository_key:
+        required: true
+        type: string
+
+permissions:
+  id-token: write # Required for OIDC authentication with JFrog
+  contents: read
+
+jobs:
+  promote-release-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Get OIDC Token
+        id: get_oidc_token
+        run: |
+          ID_TOKEN=$(curl -sLS -H "User-Agent: actions/oidc-client" -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ps-jfrog-oidc" | jq .value | tr -d '"')
+          echo "id_token=${ID_TOKEN}" >> $GITHUB_OUTPUT
+      
+      - name: Exchange for Source Access Token
+        id: get_source_token
+        run: |
+          SOURCE_ACCESS_TOKEN=$(curl -s -XPOST -H "Content-Type: application/json" "https://${{ inputs.sourceurl }}/access/api/v1/oidc/token" -d "{\"grant_type\": \"urn:ietf:params:oauth:grant-type:token-exchange\", \"subject_token_type\":\"urn:ietf:params:oauth:token-type:id_token\", \"subject_token\": \"${{ steps.get_oidc_token.outputs.id_token }}\", \"provider_name\": \"nareshgithub\"}" | jq .access_token | tr -d '"')
+          echo "source_access_token=${SOURCE_ACCESS_TOKEN}" >> $GITHUB_OUTPUT
+
+      - name: Exchange for Target Access Token
+        id: get_target_token
+        run: |
+          TARGET_ACCESS_TOKEN=$(curl -s -XPOST -H "Content-Type: application/json" "https://${{ inputs.targeturl }}/access/api/v1/oidc/token" -d "{\"grant_type\": \"urn:ietf:params:oauth:grant-type:token-exchange\", \"subject_token_type\":\"urn:ietf:params:oauth:token-type:id_token\", \"subject_token\": \"${{ steps.get_oidc_token.outputs.id_token }}\", \"provider_name\": \"nareshgithub\"}" | jq .access_token | tr -d '"')
+          echo "target_access_token=${TARGET_ACCESS_TOKEN}" >> $GITHUB_OUTPUT
+
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          JF_URL: https://${{ inputs.targeturl }}
+          JF_ACCESS_TOKEN: ${{ steps.get_target_token.outputs.target_access_token }}
+
+      - name: Run Release Bundle Promotion Script
+        run: |
+          chmod +x $GITHUB_WORKSPACE/promote_release_bundle.py
+          python $GITHUB_WORKSPACE/promote_release_bundle.py
+        env:
+          SOURCE_ACCESS_TOKEN: ${{ steps.get_source_token.outputs.source_access_token }}
+          TARGET_ACCESS_TOKEN: ${{ steps.get_target_token.outputs.target_access_token }}
+          SOURCE_URL: https://${{ inputs.sourceurl }}
+          TARGET_URL: https://${{ inputs.targeturl }}
+          RELEASE_BUNDLE: ${{ inputs.release_bundle }}
+          BUNDLE_VERSION: ${{ inputs.bundle_version }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          REPOSITORY_KEY: ${{ inputs.repository_key }}
