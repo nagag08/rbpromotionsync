@@ -4,86 +4,33 @@ import json
 import subprocess
 import sys
 
-def get_release_bundle_details(url, access_token, repository_key, release_bundle, bundle_version, project_key):
+def get_promotion_history(url, access_token, repository_key, release_bundle, bundle_version, project_key):
     """
-    Fetches release bundle audit details from Artifactory, specifying the source repository.
-    Returns parsed JSON data or None on failure.
+    Fetches the full, sorted promotion history for a release bundle version.
     """
     api_url = f"{url}/lifecycle/api/v2/audit/{release_bundle}/{bundle_version}?project={project_key}&repository_key={repository_key}"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
-
     print(f"::debug::Querying audit trail: {api_url}")
     try:
-        response = requests.get(api_url, headers=headers, timeout=30)
+        response = requests.get(api_url, headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
         if response.status_code == 404:
-            print(f"::notice::Release bundle '{release_bundle}/{bundle_version}' not found at {url}. This may be expected.")
-            return None
+            return [] # No history exists, return an empty list
         response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"::error::API request failed to {api_url}: {e}")
-        return None
-    except json.JSONDecodeError as e:
-        print(f"::error::Failed to decode JSON response from {api_url}: {e}")
-        return None
-
-def update_release_bundle_milliseconds(target_url, access_token, release_bundle, bundle_version, promotion_created_millis, project_key="default"):
-    """
-    Updates release bundle with correct timestamp for a specific promotion record.
-    Returns parsed JSON data or None on failure.
-    """
-    try:
-        promotion_created_millis = int(promotion_created_millis) + 1
-    except (ValueError, TypeError):
-        print(f"::warning::promotion_created_millis '{promotion_created_millis}' is not a valid number. Cannot increment.")
-        pass
-
-    api_url = f"{target_url}/lifecycle/api/v2/promotion/records/{release_bundle}/{bundle_version}?project={project_key}&operation=copy&promotion_created_millis={promotion_created_millis}"
-    
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
-    print(f"Attempting to update/get promotion record with API: {api_url}")
-    try:
-        response = requests.get(api_url, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"::error::API request failed to {api_url}: {e}")
-        return None
-
-def get_release_bundle_names_with_project_keys(source_url, access_token):
-    """
-    Gets list of release bundles with project key from /lifecycle/api/v2/release_bundle/names.
-    Returns parsed JSON data or None on failure.
-    """
-    api_url = f"{source_url}/lifecycle/api/v2/release_bundle/names"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
-    print(f"Fetching release bundle names from: {api_url}")
-    try:
-        response = requests.get(api_url, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"::error::API request failed to {api_url}: {e}")
-        return None
-
-def parse_repos_to_set(repo_list):
-    """Converts a list of repositories into a set for order-independent comparison."""
-    if not repo_list:
-        return set()
-    
-    parsed_set = set()
-    for item in repo_list:
-        parsed_set.update(repo.strip() for repo in item.split(','))
-    return parsed_set
+        
+        audit_data = response.json()
+        promotions = []
+        if audit_data and "audits" in audit_data:
+            for event in audit_data["audits"]:
+                # Filter for real, non-federated promotion events
+                if (event.get("subject_type") == "PROMOTION" and 
+                    not event.get("subject_reference", "").startswith("FED-")):
+                    promotions.append(event)
+        
+        # Sort promotions chronologically (oldest first) to ensure correct application order
+        promotions.sort(key=lambda x: x.get("context", {}).get("promotion_created_millis", 0))
+        return promotions
+    except Exception as e:
+        print(f"::error::Failed to get promotion history from {url}: {e}")
+        return None # Return None on critical failure
 
 def main():
     source_access_token = os.getenv("SOURCE_ACCESS_TOKEN")
@@ -92,107 +39,80 @@ def main():
     target_url = os.getenv("TARGET_URL")
     release_bundle_name = os.getenv("RELEASE_BUNDLE")
     bundle_version = os.getenv("BUNDLE_VERSION")
-    environment = os.getenv("ENVIRONMENT")
+    project_key = os.getenv("PROJECT_KEY", "default")
     input_repository_key = os.getenv("REPOSITORY_KEY")
 
-    if not all([source_access_token,target_access_token, source_url, target_url, release_bundle_name, bundle_version, environment, input_repository_key]):
+    if not all([source_access_token, target_access_token, source_url, target_url, release_bundle_name, bundle_version, input_repository_key]):
         print("::error::Missing one or more required environment variables.")
         sys.exit(1)
 
-    print(f"Processing bundle: {release_bundle_name}/{bundle_version}")
-    print(f"Triggering and Target Environment: '{environment}'")
+    print(f"--- Starting State Sync for {release_bundle_name}/{bundle_version} ---")
 
-    print("\n--- Determining Project Key ---")
-    project_key = "default" 
-    names_response = get_release_bundle_names_with_project_keys(source_url, source_access_token)
-    if names_response and "release_bundles" in names_response:
-        for rb_info in names_response["release_bundles"]:
-            if rb_info.get("repository_key") == input_repository_key:
-                project_key = rb_info.get("project_key", "default")
-                print(f"::notice::Matched repository_key '{input_repository_key}' to project_key '{project_key}'.")
-                break
-    else:
-        print("::warning::Could not fetch release bundle names. Falling back to project_key 'default'.")
-    
-    print("\n--- Finding the exact triggering promotion event on the source server ---")
-    source_audit_data = get_release_bundle_details(source_url, source_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
-    
-    source_promotion_event = None
-    if source_audit_data and "audits" in source_audit_data:
-        for event in source_audit_data.get("audits", []):
-            if (event.get("subject_type") == "PROMOTION" and 
-                not event.get("subject_reference", "").startswith("FED-")):
-                
-                event_environment = event.get("context", {}).get("environment")
-                if str(event_environment) == str(environment):
-                    print(f"::notice::Found matching source event for environment '{event_environment}'.")
-                    source_promotion_event = event
-                    break
+    # 1. Get full promotion history from both servers
+    print("\n--- Fetching Promotion Histories ---")
+    source_promotions = get_promotion_history(source_url, source_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
+    target_promotions = get_promotion_history(target_url, target_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
 
-    if not source_promotion_event:
-        print(f"::error::Could not find a promotion event for '{environment}' in the source audit trail.")
+    if source_promotions is None or target_promotions is None:
+        print("::error::Could not fetch promotion histories from source or target. Aborting.")
         sys.exit(1)
+        
+    # Create a simple set of target promotion details for easy lookup
+    target_promotions_set = set()
+    for promo in target_promotions:
+        ctx = promo.get("context", {})
+        # A promotion is uniquely identified by its environment and repositories
+        promo_tuple = (
+            ctx.get("environment"),
+            frozenset(ctx.get("included_repository_keys", [])),
+            frozenset(ctx.get("excluded_repository_keys", []))
+        )
+        target_promotions_set.add(promo_tuple)
 
-    source_context = source_promotion_event.get("context", {})
-    source_timestamp = source_context.get("promotion_created_millis")
-    source_included_repos_set = parse_repos_to_set(source_context.get("included_repository_keys"))
-    source_excluded_repos_set = parse_repos_to_set(source_context.get("excluded_repository_keys"))
-    
-    # --- PRE-FLIGHT CHECK on TARGET ---
-    print("\n--- Checking target's full history for an identical promotion ---")
-    target_audit_data = get_release_bundle_details(target_url, target_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
-    
-    if target_audit_data and "audits" in target_audit_data:
-        for audit_event in target_audit_data.get("audits", []):
-            if (audit_event.get("subject_type") == "PROMOTION" and
-                not audit_event.get("subject_reference", "").startswith("FED-")):
-                
-                target_context = audit_event.get("context", {})
-                target_environment = target_context.get("environment")
-                
-                if str(target_environment) == str(environment):
-                    print(f"::debug::Found a previous promotion to '{target_environment}'. Checking repositories...")
-                    
-                    target_included_repos_set = parse_repos_to_set(target_context.get("included_repository_keys"))
-                    target_excluded_repos_set = parse_repos_to_set(target_context.get("excluded_repository_keys"))
+    # 2. Compare histories to find what's missing on the target
+    promotions_to_sync = []
+    for promo in source_promotions:
+        ctx = promo.get("context", {})
+        promo_tuple = (
+            ctx.get("environment"),
+            frozenset(ctx.get("included_repository_keys", [])),
+            frozenset(ctx.get("excluded_repository_keys", []))
+        )
+        if promo_tuple not in target_promotions_set:
+            promotions_to_sync.append(promo)
 
-                    if (source_included_repos_set == target_included_repos_set and
-                        source_excluded_repos_set == target_excluded_repos_set):
-                        
-                        print("\n✅ Found an identical promotion in the target's history.")
-                        print("Skipping to prevent duplicate action. Exiting successfully.")
-                        sys.exit(0)
-                        
-    print(f"::notice::No identical promotion to '{environment}' found in target's history. Proceeding.")
+    # 3. Apply missing promotions to the target in order
+    if not promotions_to_sync:
+        print("\n✅ Target is already in sync. No action needed.")
+        sys.exit(0)
 
-    # --- PROCEED WITH PROMOTION ---
-    included_repository_keys = source_context.get("included_repository_keys", [])
-    excluded_repository_keys = source_context.get("excluded_repository_keys", [])
-    
-    include_repos_param = f"--include-repos={','.join(included_repository_keys)}" if included_repository_keys else ""
-    exclude_repos_param = f"--exclude-repos={','.join(excluded_repository_keys)}" if excluded_repository_keys else ""
+    print(f"\n--- Found {len(promotions_to_sync)} Missing Promotion(s) to Sync ---")
+    for promo_event in promotions_to_sync:
+        context = promo_event.get("context", {})
+        environment = context.get("environment")
+        included_repos = context.get("included_repository_keys", [])
+        excluded_repos = context.get("excluded_repository_keys", [])
+        
+        print(f"\nSyncing promotion to '{environment}'...")
 
-    jf_rbp_command = ["jf", "rbp", release_bundle_name, bundle_version, environment, f"--project={project_key}"]
-    if include_repos_param: jf_rbp_command.append(include_repos_param)
-    if exclude_repos_param: jf_rbp_command.append(exclude_repos_param) 
+        include_param = f"--include-repos={','.join(included_repos)}" if included_repos else ""
+        exclude_param = f"--exclude-repos={','.join(excluded_repos)}" if excluded_repos else ""
+        
+        jf_command = ["jf", "rbp", release_bundle_name, bundle_version, environment, f"--project={project_key}"]
+        if include_param: jf_command.append(include_param)
+        if exclude_param: jf_command.append(exclude_param)
+        
+        print(f"Executing command: {' '.join(jf_command)}")
+        try:
+            subprocess.run(jf_command, check=True, capture_output=True, text=True)
+            print(f"::notice::Successfully synced promotion to '{environment}'.")
+        except subprocess.CalledProcessError as e:
+            print(f"::error::Failed to sync promotion to '{environment}': {e.stderr}")
+            # Decide if you want to stop on failure or continue
+            # For now, we stop.
+            sys.exit(1)
 
-    print("\n--- Executing JFrog CLI Command ---")
-    print(f"Command: {' '.join(jf_rbp_command)}")
-    try:
-        result = subprocess.run(jf_rbp_command, check=True, capture_output=True, text=True)
-        print("::notice::Release bundle promotion command executed successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"::error::JFrog CLI command failed: {e.stderr}")
-        sys.exit(e.returncode)
-
-    # --- Update release bundle promotion timestamp ---
-    updaterbresponse = update_release_bundle_milliseconds(target_url, target_access_token, release_bundle_name, bundle_version, source_timestamp, project_key)
-    if updaterbresponse is None:
-        print("::error::Failed to update release bundle promotion timestamp.")
-        sys.exit(1)
-    else:
-        print("\n--- Update Release Bundle Timestamp Response ---")
-        print(json.dumps(updaterbresponse, indent=2))
+    print("\n--- Synchronization Complete ---")
 
 if __name__ == "__main__":
     main()
