@@ -31,7 +31,7 @@ concurrency:
   # Create a unique group for each release bundle name and version
   group: ${{ github.workflow }}-${{ inputs.release_bundle }}-${{ inputs.bundle_version }}
   # Queue new runs instead of canceling the one in progress
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   id-token: write # Required for OIDC authentication with JFrog
