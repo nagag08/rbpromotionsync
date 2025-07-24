@@ -4,6 +4,24 @@ import json
 import subprocess
 import sys
 
+def get_release_bundle_names_with_project_keys(source_url, access_token):
+    """
+    Gets list of release bundles with project key from /lifecycle/api/v2/release_bundle/names.
+    """
+    api_url = f"{source_url}/lifecycle/api/v2/release_bundle/names"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    print(f"::debug::Fetching release bundle names from: {api_url}")
+    try:
+        response = requests.get(api_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"::error::Failed to get release bundle names: {e}")
+        return None
+
 def get_promotion_history(url, access_token, repository_key, release_bundle, bundle_version, project_key):
     """
     Fetches the full, sorted promotion history for a release bundle version.
@@ -20,17 +38,15 @@ def get_promotion_history(url, access_token, repository_key, release_bundle, bun
         promotions = []
         if audit_data and "audits" in audit_data:
             for event in audit_data["audits"]:
-                # Filter for real, non-federated promotion events
                 if (event.get("subject_type") == "PROMOTION" and 
                     not event.get("subject_reference", "").startswith("FED-")):
                     promotions.append(event)
         
-        # Sort promotions chronologically (oldest first) to ensure correct application order
         promotions.sort(key=lambda x: x.get("context", {}).get("promotion_created_millis", 0))
         return promotions
     except Exception as e:
         print(f"::error::Failed to get promotion history from {url}: {e}")
-        return None # Return None on critical failure
+        return None
 
 def main():
     source_access_token = os.getenv("SOURCE_ACCESS_TOKEN")
@@ -39,7 +55,6 @@ def main():
     target_url = os.getenv("TARGET_URL")
     release_bundle_name = os.getenv("RELEASE_BUNDLE")
     bundle_version = os.getenv("BUNDLE_VERSION")
-    project_key = os.getenv("PROJECT_KEY", "default")
     input_repository_key = os.getenv("REPOSITORY_KEY")
 
     if not all([source_access_token, target_access_token, source_url, target_url, release_bundle_name, bundle_version, input_repository_key]):
@@ -47,6 +62,19 @@ def main():
         sys.exit(1)
 
     print(f"--- Starting State Sync for {release_bundle_name}/{bundle_version} ---")
+
+    # --- Find the correct Project Key ---
+    print("\n--- Determining Project Key ---")
+    project_key = "default"
+    names_response = get_release_bundle_names_with_project_keys(source_url, source_access_token)
+    if names_response and "release_bundles" in names_response:
+        for rb_info in names_response["release_bundles"]:
+            if rb_info.get("repository_key") == input_repository_key:
+                project_key = rb_info.get("project_key", "default")
+                print(f"::notice::Matched repository_key '{input_repository_key}' to project_key '{project_key}'.")
+                break
+    else:
+        print("::warning::Could not fetch release bundle names. Falling back to project_key 'default'.")
 
     # 1. Get full promotion history from both servers
     print("\n--- Fetching Promotion Histories ---")
@@ -57,11 +85,9 @@ def main():
         print("::error::Could not fetch promotion histories from source or target. Aborting.")
         sys.exit(1)
         
-    # Create a simple set of target promotion details for easy lookup
     target_promotions_set = set()
     for promo in target_promotions:
         ctx = promo.get("context", {})
-        # A promotion is uniquely identified by its environment and repositories
         promo_tuple = (
             ctx.get("environment"),
             frozenset(ctx.get("included_repository_keys", [])),
@@ -108,8 +134,6 @@ def main():
             print(f"::notice::Successfully synced promotion to '{environment}'.")
         except subprocess.CalledProcessError as e:
             print(f"::error::Failed to sync promotion to '{environment}': {e.stderr}")
-            # Decide if you want to stop on failure or continue
-            # For now, we stop.
             sys.exit(1)
 
     print("\n--- Synchronization Complete ---")
