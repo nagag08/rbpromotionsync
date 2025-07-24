@@ -86,7 +86,6 @@ def parse_repos_to_set(repo_list):
     return parsed_set
 
 def main():
-    # --- Get all environment variables ---
     source_access_token = os.getenv("SOURCE_ACCESS_TOKEN")
     target_access_token = os.getenv("TARGET_ACCESS_TOKEN")
     source_url = os.getenv("SOURCE_URL")
@@ -95,24 +94,10 @@ def main():
     bundle_version = os.getenv("BUNDLE_VERSION")
     environment = os.getenv("ENVIRONMENT")
     input_repository_key = os.getenv("REPOSITORY_KEY")
-    jpd_origin = os.getenv("JPD_ORIGIN")
-    primary_source_url = os.getenv("PRIMARY_SOURCE_URL")
 
-    if not all([source_access_token, target_access_token, source_url, target_url, release_bundle_name, bundle_version, environment, input_repository_key, jpd_origin, primary_source_url]):
-        print("::error::Missing one or more required environment variables. Ensure JPD_ORIGIN and PRIMARY_SOURCE_URL are set.")
+    if not all([source_access_token,target_access_token, source_url, target_url, release_bundle_name, bundle_version, environment, input_repository_key]):
+        print("::error::Missing one or more required environment variables.")
         sys.exit(1)
-
-    # --- Definitive Loop Prevention Check ---
-    print(f"--- Checking event origin: Triggered from '{jpd_origin}' ---")
-    
-    # If the event came from any server that is NOT our designated primary source, stop.
-    if jpd_origin != primary_source_url:
-        print(f"\n✅ Event originated from '{jpd_origin}', which is not the primary source ('{primary_source_url}').")
-        print("Ignoring event to prevent loop. Exiting successfully.")
-        sys.exit(0)
-    
-    print(f"::notice::Event originated from the primary source server ('{primary_source_url}'). Proceeding with replication...")
-    print("----------------------------------------------------------------")
 
     print(f"Processing bundle: {release_bundle_name}/{bundle_version}")
     print(f"Triggering and Target Environment: '{environment}'")
@@ -128,7 +113,7 @@ def main():
                 break
     else:
         print("::warning::Could not fetch release bundle names. Falling back to project_key 'default'.")
-
+    
     print("\n--- Finding the exact triggering promotion event on the source server ---")
     source_audit_data = get_release_bundle_details(source_url, source_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
     
@@ -153,33 +138,34 @@ def main():
     source_included_repos_set = parse_repos_to_set(source_context.get("included_repository_keys"))
     source_excluded_repos_set = parse_repos_to_set(source_context.get("excluded_repository_keys"))
     
-    print("\n--- Checking latest promotion on target for an identical match ---")
+    # --- PRE-FLIGHT CHECK on TARGET ---
+    print("\n--- Checking target's full history for an identical promotion ---")
     target_audit_data = get_release_bundle_details(target_url, target_access_token, input_repository_key, release_bundle_name, bundle_version, project_key)
     
-    latest_target_promotion_event = None
     if target_audit_data and "audits" in target_audit_data:
         for audit_event in target_audit_data.get("audits", []):
             if (audit_event.get("subject_type") == "PROMOTION" and
                 not audit_event.get("subject_reference", "").startswith("FED-")):
-                latest_target_promotion_event = audit_event
-                break
-
-    if latest_target_promotion_event:
-        target_context = latest_target_promotion_event.get("context", {})
-        latest_target_environment = target_context.get("environment")
-        
-        if str(latest_target_environment) == str(environment):
-            target_included_repos_set = parse_repos_to_set(target_context.get("included_repository_keys"))
-            target_excluded_repos_set = parse_repos_to_set(target_context.get("excluded_repository_keys"))
-
-            if (source_included_repos_set == target_included_repos_set and
-                source_excluded_repos_set == target_excluded_repos_set):
                 
-                print("\n✅ Latest promotion on target is identical. Skipping.")
-                sys.exit(0)
+                target_context = audit_event.get("context", {})
+                target_environment = target_context.get("environment")
                 
-    print("::notice::Latest promotion on target is different or non-existent. Proceeding.")
+                if str(target_environment) == str(environment):
+                    print(f"::debug::Found a previous promotion to '{target_environment}'. Checking repositories...")
+                    
+                    target_included_repos_set = parse_repos_to_set(target_context.get("included_repository_keys"))
+                    target_excluded_repos_set = parse_repos_to_set(target_context.get("excluded_repository_keys"))
 
+                    if (source_included_repos_set == target_included_repos_set and
+                        source_excluded_repos_set == target_excluded_repos_set):
+                        
+                        print("\n✅ Found an identical promotion in the target's history.")
+                        print("Skipping to prevent duplicate action. Exiting successfully.")
+                        sys.exit(0)
+                        
+    print(f"::notice::No identical promotion to '{environment}' found in target's history. Proceeding.")
+
+    # --- PROCEED WITH PROMOTION ---
     included_repository_keys = source_context.get("included_repository_keys", [])
     excluded_repository_keys = source_context.get("excluded_repository_keys", [])
     
@@ -199,6 +185,7 @@ def main():
         print(f"::error::JFrog CLI command failed: {e.stderr}")
         sys.exit(e.returncode)
 
+    # --- Update release bundle promotion timestamp ---
     updaterbresponse = update_release_bundle_milliseconds(target_url, target_access_token, release_bundle_name, bundle_version, source_timestamp, project_key)
     if updaterbresponse is None:
         print("::error::Failed to update release bundle promotion timestamp.")
