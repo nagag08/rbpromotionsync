@@ -47,7 +47,7 @@ def api_request(method, url, access_token, json_payload=None, params=None, timeo
 
 def get_release_bundle_audit_history(jpd_url, access_token, release_bundle, bundle_version, project_key):
     """
-    Fetches release bundle audit details from Artifactory and filters for COMPLETED PROMOTION events.
+    Fetches release bundle audit details from Artifactory and filters for COMPLETED, non-federated PROMOTION events.
     """
     api_url = f"{jpd_url}/lifecycle/api/v2/audit/{release_bundle}/{bundle_version}"
     params = {"project": project_key}
@@ -59,7 +59,10 @@ def get_release_bundle_audit_history(jpd_url, access_token, release_bundle, bund
     completed_promotions = []
     if "audits" in audit_data and isinstance(audit_data["audits"], list):
         for audit_event in audit_data["audits"]:
-            if audit_event.get("subject_type") == "PROMOTION" and audit_event.get("event_status") == "COMPLETED":
+            # CORRECTED: Added check to ignore internal federated events
+            if (audit_event.get("subject_type") == "PROMOTION" and 
+                audit_event.get("event_status") == "COMPLETED" and
+                not audit_event.get("subject_reference", "").startswith("FED-")):
                 completed_promotions.append(audit_event)
     
     completed_promotions.sort(key=lambda x: x.get('created_millis', 0))
