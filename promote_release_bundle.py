@@ -48,6 +48,25 @@ def get_promotion_history(url, access_token, repository_key, release_bundle, bun
         print(f"::error::Failed to get promotion history from {url}: {e}")
         return None
 
+# --- Function to update the timestamp ---
+def update_release_bundle_milliseconds(target_url, access_token, release_bundle, bundle_version, promotion_created_millis, project_key="default"):
+    """
+    Updates release bundle with a specific timestamp for a promotion record.
+    """
+    api_url = f"{target_url}/lifecycle/api/v2/promotion/records/{release_bundle}/{bundle_version}?project={project_key}&operation=copy&promotion_created_millis={promotion_created_millis}"
+    print(f"Attempting to update promotion record with API: {api_url}")
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        response = requests.get(api_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"::error::API request failed to {api_url}: {e}")
+        return None
+
 def parse_repos_to_set(repo_list):
     """
     Converts a list of repositories into a frozenset for order-independent 
@@ -58,7 +77,6 @@ def parse_repos_to_set(repo_list):
     
     parsed_set = set()
     for item in repo_list:
-        # Split items that might be comma-separated, e.g., "repo-a,repo-b"
         parsed_set.update(repo.strip() for repo in item.split(','))
     return frozenset(parsed_set)
 
@@ -96,7 +114,6 @@ def main():
         print("::error::Could not fetch promotion histories from source or target. Aborting.")
         sys.exit(1)
         
-    # build the set of target promotions
     target_promotions_set = set()
     for promo in target_promotions:
         ctx = promo.get("context", {})
@@ -107,7 +124,6 @@ def main():
         )
         target_promotions_set.add(promo_tuple)
 
-    # Use the new parsing function to compare source promotions
     promotions_to_sync = []
     for promo in source_promotions:
         ctx = promo.get("context", {})
@@ -129,6 +145,8 @@ def main():
         environment = context.get("environment")
         included_repos = context.get("included_repository_keys", [])
         excluded_repos = context.get("excluded_repository_keys", [])
+        # Get the original timestamp for this specific event
+        original_promotion_millis = context.get("promotion_created_millis")
         
         print(f"\nSyncing promotion to '{environment}'...")
 
@@ -143,6 +161,32 @@ def main():
         try:
             subprocess.run(jf_command, check=True, capture_output=True, text=True)
             print(f"::notice::Successfully synced promotion to '{environment}'.")
+
+            # --- Call to update the timestamp after successful promotion ---
+            if original_promotion_millis:
+                print(f"NOTICE: Updating timestamp for promotion to {environment}...")
+                try:
+                    # Add +1 millisecond to the original timestamp before sending the update
+                    updated_millis = int(original_promotion_millis) + 1
+                except (ValueError, TypeError):
+                    print(f"WARNING: original_promotion_millis '{original_promotion_millis}' is not a valid number. Cannot increment.")
+                    updated_millis = original_promotion_millis
+                
+                update_response = update_release_bundle_milliseconds(
+                    target_url,
+                    target_access_token,
+                    release_bundle_name,
+                    bundle_version,
+                    updated_millis,
+                    project_key
+                )
+                if update_response is None:
+                    print(f"ERROR: Failed to update timestamp for promotion to {environment}.")
+                else:
+                    print(f"SUCCESS: Timestamp updated for {environment}.")
+            else:
+                print(f"WARNING: Skipping timestamp update for {environment}: Original timestamp not available.")
+
         except subprocess.CalledProcessError as e:
             print(f"::error::Failed to sync promotion to '{environment}': {e.stderr}")
             sys.exit(1)
