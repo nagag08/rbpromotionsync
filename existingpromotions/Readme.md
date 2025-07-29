@@ -50,72 +50,39 @@ The script is run from the command line.
 ```bash
 python3 sync_rb_promotions.py <SOURCE_TOKEN> <TARGET_TOKEN> <SOURCE_URL> <TARGET_URL> [ENVIRONMENT_FILTER] [--project-filter <PROJECT_KEY>]
 ```
-Arguments
-Argument
 
-Description
+**Arguments**
 
-Required
+Argument	Description	Required	Example
+SOURCE_TOKEN	An access token for the source JPD.	Yes	eyJ...
+TARGET_TOKEN	An access token for the target JPD.	Yes	eyJ...
+SOURCE_URL	The full base URL of the source JPD.	Yes	https://my-source.jfrog.io
+TARGET_URL	The full base URL of the target JPD.	Yes	https://my-target.jfrog.io
+ENVIRONMENT_FILTER	Optional: The specific environment to sync (e.g., "PROD"). To sync all, provide empty quotes "".	No	"PROD"
+--project-filter	Optional: The specific project key to sync. If omitted, all projects are considered.	No	my-project-key
 
-Example
-
-SOURCE_TOKEN
-
-An access token for the source JPD.
-
-Yes
-
-eyJ...
-
-TARGET_TOKEN
-
-An access token for the target JPD.
-
-Yes
-
-eyJ...
-
-SOURCE_URL
-
-The full base URL of the source JPD.
-
-Yes
-
-https://my-source.jfrog.io
-
-TARGET_URL
-
-The full base URL of the target JPD.
-
-Yes
-
-https://my-target.jfrog.io
-
-ENVIRONMENT_FILTER
-
-Optional: The specific environment to sync (e.g., "PROD"). To sync all, provide empty quotes "".
-
-No
-
-"PROD"
-
---project-filter
-
-Optional: The specific project key to sync. If omitted, all projects are considered.
-
-No
-
-my-project-key
 
 Examples
 Sync all promotions for all projects:
-
+``` 
 python3 sync_rb_promotions.py <source_token> <target_token> [https://source.jfrog.io](https://source.jfrog.io) [https://target.jfrog.io](https://target.jfrog.io) ""
-
 Sync only promotions for the nd project:
-
+```
+```
 python3 sync_rb_promotions.py <source_token> <target_token> [https://source.jfrog.io](https://source.jfrog.io) [https://target.jfrog.io](https://target.jfrog.io) "" --project-filter "nd"
-
+```
 Sync only PROD promotions for the nd project:
 
+```
 python3 sync_rb_promotions.py <source_token> <target_token> [https://source.jfrog.io](https://source.jfrog.io) [https://target.jfrog.io](https://target.jfrog.io) "PROD" --project-filter "nd"
+```
+📜 License / Disclaimer
+JFrog hereby grants you a non-exclusive, non-transferable, non-distributable right 
+to use this  code   solely in connection with your use of a JFrog product or service. 
+This  code is provided 'as-is' and without any warranties or conditions, either 
+express or implied including, without limitation, any warranties or conditions of 
+title, non-infringement, merchantability or fitness for a particular cause. 
+Nothing herein shall convey to you any right or title in the code, other than 
+for the limited use right set forth herein. For the purposes hereof "you" shall
+mean you as an individual as well as the organization on behalf of which you
+are using the software and the JFrog product or service. 
