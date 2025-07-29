@@ -107,7 +107,7 @@ def main():
         )
         target_promotions_set.add(promo_tuple)
 
-    # CORRECTED: Use the new parsing function to compare source promotions
+    # Use the new parsing function to compare source promotions
     promotions_to_sync = []
     for promo in source_promotions:
         ctx = promo.get("context", {})
