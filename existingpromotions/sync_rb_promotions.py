@@ -22,7 +22,6 @@ def api_request(method, url, access_token, json_payload=None, params=None, timeo
     """
     Generic function to make API requests and handle common errors.
     """
-    # This function is correct and does not need changes.
     print(f"DEBUG: Making {method} request to: {url}")
     if json_payload:
         print(f"DEBUG: Request payload: {json.dumps(json_payload)}")
@@ -45,13 +44,11 @@ def api_request(method, url, access_token, json_payload=None, params=None, timeo
         if e.response is not None:
             print(f"ERROR: Response body: {e.response.text}")
         return None
-    # ... other error handling
 
 def get_release_bundle_audit_history(jpd_url, access_token, release_bundle, bundle_version, project_key):
     """
     Fetches release bundle audit details from Artifactory and filters for COMPLETED PROMOTION events.
     """
-    # This function is correct and does not need changes.
     api_url = f"{jpd_url}/lifecycle/api/v2/audit/{release_bundle}/{bundle_version}"
     params = {"project": project_key}
     audit_data = api_request("GET", api_url, access_token, params=params)
@@ -72,7 +69,6 @@ def get_release_bundle_names_with_project_keys(jpd_url, access_token):
     """
     Gets list of release bundles with project key from /lifecycle/api/v2/release_bundle/names.
     """
-    # This function is correct and does not need changes.
     api_url = f"{jpd_url}/lifecycle/api/v2/release_bundle/names"
     return api_request("GET", api_url, access_token)
 
@@ -80,13 +76,20 @@ def get_release_bundle_versions(jpd_url, access_token, release_bundle_name, proj
     """
     Gets list of versions for a specific release bundle name.
     """
-    # This function is correct and does not need changes.
     api_url = f"{jpd_url}/lifecycle/api/v2/release_bundle/records/{release_bundle_name}" 
     params = {"project": project_key}
     response_data = api_request("GET", api_url, access_token, params=params)
     if response_data is None:
         return None
     return response_data.get("release_bundles", []) 
+
+def update_release_bundle_milliseconds(target_url, access_token, release_bundle, bundle_version, promotion_created_millis, project_key="default"):
+    """
+    Updates release bundle with a specific timestamp for a promotion record.
+    """
+    api_url = f"{target_url}/lifecycle/api/v2/promotion/records/{release_bundle}/{bundle_version}?project={project_key}&operation=copy&promotion_created_millis={promotion_created_millis}"
+    print(f"Attempting to update promotion record with API: {api_url}")
+    return api_request("GET", api_url, access_token)
 
 def parse_repos_to_set(repo_list):
     """
@@ -112,13 +115,36 @@ def main():
 
     args = parser.parse_args()
     
-    # ... (argument parsing and CLI config) ...
     source_access_token = args.sourcetoken
     target_access_token = args.targettoken
     source_url = args.sourceurl
     target_url = args.targeturl
     environment_filter = args.environmentfilter
     project_filter = args.project_filter
+    
+    print("INFO: Starting Release Bundle Synchronization process.")
+    if project_filter:
+        print(f"INFO: Project Filter: Only syncing bundles for project '{project_filter}'.")
+
+    # --- Configure JFrog CLI for the Target Server ---
+    print("\n--- Configuring JFrog CLI to use the target server ---")
+    try:
+        print("INFO: Cleaning old JFrog CLI configurations...")
+        subprocess.run(["jf", "c", "remove", "--quiet"], check=True)
+
+        print(f"INFO: Configuring target server: {target_url}")
+        config_command = [
+            "jf", "c", "add", "target-server",
+            f"--url={target_url}", f"--access-token={target_access_token}",
+            "--interactive=false", "--overwrite"
+        ]
+        subprocess.run(config_command, check=True, capture_output=True, text=True)
+        
+        subprocess.run(["jf", "c", "use", "target-server"], check=True)
+        print("INFO: JFrog CLI configured successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: Failed to configure JFrog CLI: {e.stderr}")
+        sys.exit(1)
     
     all_source_rb_names_info = get_release_bundle_names_with_project_keys(source_url, source_access_token)
     if not all_source_rb_names_info or not all_source_rb_names_info.get("release_bundles"):
@@ -130,6 +156,8 @@ def main():
 
         if project_filter and current_project_key != project_filter:
             continue
+
+        print(f"\n--- Processing Bundle Name: {current_release_bundle_name} (Project: {current_project_key}) ---")
 
         all_source_rb_versions_info = get_release_bundle_versions(source_url, source_access_token, current_release_bundle_name, current_project_key)
         if not all_source_rb_versions_info:
@@ -148,7 +176,6 @@ def main():
             if source_promotions is None or target_promotions is None:
                 continue
             
-            # --- Use Counters to handle re-promotions ---
             def get_promo_signature(promo):
                 ctx = promo.get('context', {})
                 return (
@@ -161,15 +188,11 @@ def main():
             target_promo_counts = Counter(get_promo_signature(p) for p in target_promotions)
 
             promotions_to_sync = []
-            # Find promotions where the count on the source is greater than on the target
             for promo_sig, source_count in source_promo_counts.items():
                 target_count = target_promo_counts.get(promo_sig, 0)
                 if source_count > target_count:
-                    # Find the original event to get its details
-                    # This assumes we add the latest occurrence of the event
                     for promo_event in reversed(source_promotions):
                         if get_promo_signature(promo_event) == promo_sig:
-                            # Add this event to be synced for each missing occurrence
                             for _ in range(source_count - target_count):
                                 promotions_to_sync.append(promo_event)
                             break
@@ -180,7 +203,6 @@ def main():
 
             print(f"NOTICE: Found {len(promotions_to_sync)} missing promotions to sync.")
             
-            # --- Apply Missing Promotions ---
             for promo_event in promotions_to_sync:
                 context = promo_event.get('context', {})
                 target_env_for_promo = context.get('environment')
@@ -191,6 +213,7 @@ def main():
 
                 promo_inc_repos = context.get('included_repository_keys', [])
                 promo_exc_repos = context.get('excluded_repository_keys', [])
+                original_promotion_millis = promo_event.get('created_millis')
                 
                 include_param = f"--include-repos={','.join(promo_inc_repos)}" if promo_inc_repos else ""
                 exclude_param = f"--exclude-repos={','.join(promo_exc_repos)}" if promo_exc_repos else ""
@@ -203,12 +226,39 @@ def main():
                 try:
                     subprocess.run(jf_command, check=True, capture_output=True, text=True)
                     print(f"SUCCESS: Promoted to {target_env_for_promo}.")
+                    
+                    # Call to update the timestamp after successful promotion
+                    if original_promotion_millis:
+                        print(f"NOTICE: Updating timestamp for promotion to {target_env_for_promo}...")
+                        try:
+                            # Add +1 millisecond to the original timestamp before sending the update
+                            updated_millis = int(original_promotion_millis) + 1
+                        except (ValueError, TypeError):
+                            print(f"WARNING: original_promotion_millis '{original_promotion_millis}' is not a valid number. Cannot increment.")
+                            updated_millis = original_promotion_millis
+                        
+                        update_response = update_release_bundle_milliseconds(
+                            target_url,
+                            target_access_token,
+                            current_release_bundle_name,
+                            current_bundle_version,
+                            updated_millis,
+                            current_project_key
+                        )
+                        if update_response is None:
+                            print(f"ERROR: Failed to update timestamp for promotion to {target_env_for_promo}.")
+                        else:
+                            print(f"SUCCESS: Timestamp updated for {target_env_for_promo}.")
+                    else:
+                        print(f"WARNING: Skipping timestamp update for {target_env_for_promo}: Original timestamp not available.")
+
                 except subprocess.CalledProcessError as e:
                     print(f"ERROR: Failed to promote to {target_env_for_promo}: {e.stderr}")
                     continue
 
 if __name__ == "__main__":
     main()
+
 
 # Example 
 # python3 sync_rb_promotions.py <source access token> <target access token>   <source jpd url> <target jpd url> "" --project-filter "<project key>"
