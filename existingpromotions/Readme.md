@@ -49,7 +49,7 @@ The script is run from the command line.
 
 ```bash
 python3 sync_rb_promotions.py <SOURCE_TOKEN> <TARGET_TOKEN> <SOURCE_URL> <TARGET_URL> [ENVIRONMENT_FILTER] [--project-filter <PROJECT_KEY>]
-
+```
 Arguments
 Argument
 
