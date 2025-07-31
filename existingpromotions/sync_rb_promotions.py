@@ -59,7 +59,7 @@ def get_release_bundle_audit_history(jpd_url, access_token, release_bundle, bund
     completed_promotions = []
     if "audits" in audit_data and isinstance(audit_data["audits"], list):
         for audit_event in audit_data["audits"]:
-            # CORRECTED: Added check to ignore internal federated events
+            # Added check to ignore internal federated events
             if (audit_event.get("subject_type") == "PROMOTION" and 
                 audit_event.get("event_status") == "COMPLETED" and
                 not audit_event.get("subject_reference", "").startswith("FED-")):
@@ -125,7 +125,7 @@ def main():
     print("\n--- Configuring JFrog CLI to use the target server ---")
     try:
         print("INFO: Cleaning old JFrog CLI configurations...")
-        subprocess.run(["jf", "c", "remove", "--quiet"], check=True)
+        subprocess.run(["jf", "c", "remove", "target-server", "--quiet"], check=True)
 
         print(f"INFO: Configuring target server: {target_url}")
         config_command = [
@@ -177,16 +177,18 @@ def main():
                     parse_repos_to_set(ctx.get('excluded_repository_keys', []))
                 )
 
+            source_promo_counts = Counter(get_promo_signature(p) for p in source_promotions)
             target_promo_counts = Counter(get_promo_signature(p) for p in target_promotions)
-            promotions_to_sync = []
 
-            for source_promo in source_promotions:
-                promo_sig = get_promo_signature(source_promo)
-                
-                if target_promo_counts[promo_sig] > 0:
-                    target_promo_counts[promo_sig] -= 1
-                else:
-                    promotions_to_sync.append(source_promo)
+            promotions_to_sync = []
+            for promo_sig, source_count in source_promo_counts.items():
+                target_count = target_promo_counts.get(promo_sig, 0)
+                if source_count > target_count:
+                    for promo_event in reversed(source_promotions):
+                        if get_promo_signature(promo_event) == promo_sig:
+                            for _ in range(source_count - target_count):
+                                promotions_to_sync.append(promo_event)
+                            break
             
             if not promotions_to_sync:
                 print(f"INFO: Target is already in sync for {current_release_bundle_name}/{current_bundle_version}.")
