@@ -17,6 +17,9 @@ import subprocess
 import sys
 import argparse
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
 
 def api_request(method, url, access_token, json_payload=None, params=None, timeout=30):
     """
@@ -99,6 +102,96 @@ def parse_repos_to_set(repo_list):
         parsed_set.update(repo.strip() for repo in item.split(','))
     return frozenset(parsed_set)
 
+def process_release_bundle(rb_name_info, source_url, source_access_token, target_url, target_access_token, project_filter):
+    """
+    Process a single release bundle for synchronization.
+    This function contains the logic that was previously in the main loop.
+    
+    Returns:
+        tuple: (success: bool, error_msg: str or None)
+            - success: True if all promotions succeeded, False if any failed
+            - error_msg: Error message if failed, None if successful
+    """
+    current_release_bundle_name = rb_name_info.get("release_bundle_name")
+    current_project_key = rb_name_info.get("project_key", "default") 
+
+    if project_filter and current_project_key != project_filter:
+        return True, None  # Skipped due to project filter, not an error
+
+    all_source_rb_versions_info = get_release_bundle_versions(source_url, source_access_token, current_release_bundle_name, current_project_key)
+    if not all_source_rb_versions_info:
+        return True, None  # No versions to process, not an error
+
+    for rb_version_info in all_source_rb_versions_info:
+        current_bundle_version = rb_version_info.get("release_bundle_version")
+        if not current_bundle_version:
+            continue
+
+        print(f"\n--- Processing Version: {current_release_bundle_name}/{current_bundle_version} ---")
+        
+        source_promotions = get_release_bundle_audit_history(source_url, source_access_token, current_release_bundle_name, current_bundle_version, current_project_key)
+        target_promotions = get_release_bundle_audit_history(target_url, target_access_token, current_release_bundle_name, current_bundle_version, current_project_key)
+        
+        if source_promotions is None or target_promotions is None:
+            continue
+        
+        def get_promo_signature(promo):
+            ctx = promo.get('context', {})
+            return (
+                ctx.get('environment'),
+                parse_repos_to_set(ctx.get('included_repository_keys', [])),
+                parse_repos_to_set(ctx.get('excluded_repository_keys', []))
+            )
+
+        source_promo_counts = Counter(get_promo_signature(p) for p in source_promotions)
+        target_promo_counts = Counter(get_promo_signature(p) for p in target_promotions)
+
+        promotions_to_sync = []
+        for promo_sig, source_count in source_promo_counts.items():
+            target_count = target_promo_counts.get(promo_sig, 0)
+            if source_count > target_count:
+                for promo_event in reversed(source_promotions):
+                    if get_promo_signature(promo_event) == promo_sig:
+                        for _ in range(source_count - target_count):
+                            promotions_to_sync.append(promo_event)
+                        break
+        
+        if not promotions_to_sync:
+            print(f"INFO: Target is already in sync for {current_release_bundle_name}/{current_bundle_version}.")
+            continue
+
+        print(f"NOTICE: Found {len(promotions_to_sync)} missing promotions to sync. Applying in sequence...")
+        
+        for promo_event in promotions_to_sync:
+            context = promo_event.get('context', {})
+            target_env_for_promo = context.get('environment')
+            
+            if not target_env_for_promo:
+                print(f"WARNING: Skipping a promotion event because it is missing the 'environment' field.")
+                continue
+
+            promo_inc_repos = context.get('included_repository_keys', [])
+            promo_exc_repos = context.get('excluded_repository_keys', [])
+            
+            include_param = f"--include-repos={','.join(promo_inc_repos)}" if promo_inc_repos else ""
+            exclude_param = f"--exclude-repos={','.join(promo_exc_repos)}" if promo_exc_repos else ""
+            
+            jf_command = ["jf", "rbp", current_release_bundle_name, current_bundle_version, target_env_for_promo, f"--project={current_project_key}"]
+            if include_param: jf_command.append(include_param)
+            if exclude_param: jf_command.append(exclude_param)
+            
+            # print(f"NOTICE: Promoting {current_release_bundle_name}:{current_bundle_version} to {target_env_for_promo}...")
+            try:
+                subprocess.run(jf_command, check=True, capture_output=True, text=True)
+                print(f"SUCCESS: Promoted {current_release_bundle_name}:{current_bundle_version} to {target_env_for_promo}.")
+            except subprocess.CalledProcessError as e:
+                error_msg = f"Failed to promote {current_release_bundle_name}:{current_bundle_version} to {target_env_for_promo}: {e.stderr}"
+                print(f"ERROR: {error_msg}")
+                return False, error_msg
+    
+    # If we reach here, all promotions were successful
+    return True, None
+
 def main():
     parser = argparse.ArgumentParser(description="Synchronize Release Bundle promotions between two JFrog JPDs.")
     parser.add_argument("sourcetoken", help="Access Token for the Source JPD.")
@@ -145,82 +238,45 @@ def main():
     if not all_source_rb_names_info or not all_source_rb_names_info.get("release_bundles"):
         sys.exit(0)
 
-    for rb_name_info in all_source_rb_names_info["release_bundles"]:
-        current_release_bundle_name = rb_name_info.get("release_bundle_name")
-        current_project_key = rb_name_info.get("project_key", "default") 
-
-        if project_filter and current_project_key != project_filter:
-            continue
-
-        all_source_rb_versions_info = get_release_bundle_versions(source_url, source_access_token, current_release_bundle_name, current_project_key)
-        if not all_source_rb_versions_info:
-            continue
-
-        for rb_version_info in all_source_rb_versions_info:
-            current_bundle_version = rb_version_info.get("release_bundle_version")
-            if not current_bundle_version:
-                continue
-
-            print(f"\n--- Processing Version: {current_release_bundle_name}/{current_bundle_version} ---")
+    # Process release bundles in parallel using 20 threads
+    total_bundles = len(all_source_rb_names_info['release_bundles'])
+    print(f"INFO: Processing {total_bundles} release bundles using 20 parallel threads...")
+    
+    completed_count = 0
+    failed_count = 0
+    maxworkers=20
+    with ThreadPoolExecutor(max_workers=maxworkers) as executor:
+        # Submit all tasks
+        future_to_rb = {
+            executor.submit(
+                process_release_bundle, 
+                rb_name_info, 
+                source_url, 
+                source_access_token, 
+                target_url, 
+                target_access_token, 
+                project_filter
+            ): rb_name_info 
+            for rb_name_info in all_source_rb_names_info["release_bundles"]
+        }
+        
+        # Process completed tasks
+        for future in as_completed(future_to_rb):
+            rb_name_info = future_to_rb[future]
+            completed_count += 1
             
-            source_promotions = get_release_bundle_audit_history(source_url, source_access_token, current_release_bundle_name, current_bundle_version, current_project_key)
-            target_promotions = get_release_bundle_audit_history(target_url, target_access_token, current_release_bundle_name, current_bundle_version, current_project_key)
-            
-            if source_promotions is None or target_promotions is None:
-                continue
-            
-            def get_promo_signature(promo):
-                ctx = promo.get('context', {})
-                return (
-                    ctx.get('environment'),
-                    parse_repos_to_set(ctx.get('included_repository_keys', [])),
-                    parse_repos_to_set(ctx.get('excluded_repository_keys', []))
-                )
-
-            source_promo_counts = Counter(get_promo_signature(p) for p in source_promotions)
-            target_promo_counts = Counter(get_promo_signature(p) for p in target_promotions)
-
-            promotions_to_sync = []
-            for promo_sig, source_count in source_promo_counts.items():
-                target_count = target_promo_counts.get(promo_sig, 0)
-                if source_count > target_count:
-                    for promo_event in reversed(source_promotions):
-                        if get_promo_signature(promo_event) == promo_sig:
-                            for _ in range(source_count - target_count):
-                                promotions_to_sync.append(promo_event)
-                            break
-            
-            if not promotions_to_sync:
-                print(f"INFO: Target is already in sync for {current_release_bundle_name}/{current_bundle_version}.")
-                continue
-
-            print(f"NOTICE: Found {len(promotions_to_sync)} missing promotions to sync. Applying in sequence...")
-            
-            for promo_event in promotions_to_sync:
-                context = promo_event.get('context', {})
-                target_env_for_promo = context.get('environment')
-                
-                if not target_env_for_promo:
-                    print(f"WARNING: Skipping a promotion event because it is missing the 'environment' field.")
-                    continue
-
-                promo_inc_repos = context.get('included_repository_keys', [])
-                promo_exc_repos = context.get('excluded_repository_keys', [])
-                
-                include_param = f"--include-repos={','.join(promo_inc_repos)}" if promo_inc_repos else ""
-                exclude_param = f"--exclude-repos={','.join(promo_exc_repos)}" if promo_exc_repos else ""
-                
-                jf_command = ["jf", "rbp", current_release_bundle_name, current_bundle_version, target_env_for_promo, f"--project={current_project_key}"]
-                if include_param: jf_command.append(include_param)
-                if exclude_param: jf_command.append(exclude_param)
-                
-                print(f"NOTICE: Promoting to {target_env_for_promo}...")
-                try:
-                    subprocess.run(jf_command, check=True, capture_output=True, text=True)
-                    print(f"SUCCESS: Promoted to {target_env_for_promo}.")
-                except subprocess.CalledProcessError as e:
-                    print(f"ERROR: Failed to promote to {target_env_for_promo}: {e.stderr}")
-                    continue
+            try:
+                success, error_msg = future.result()  # Get the return values
+                if success:
+                    print(f"INFO: Completed processing for release bundle: {rb_name_info.get('release_bundle_name', 'unknown')} ({completed_count}/{total_bundles})")
+                else:
+                    failed_count += 1
+                    print(f"ERROR: Failed to process release bundle {rb_name_info.get('release_bundle_name', 'unknown')}: {error_msg}")
+            except Exception as e:
+                failed_count += 1
+                print(f"ERROR: Failed to process release bundle {rb_name_info.get('release_bundle_name', 'unknown')}: {e}")
+    
+    print(f"INFO: All release bundle processing completed. Success: {completed_count - failed_count}, Failed: {failed_count}")
 
 if __name__ == "__main__":
     main()
